@@ -1,23 +1,20 @@
 % Generate problem data
 
-randn('seed', 0);
-rand('seed',0);
+randn('state', 0);
+rand('state', 0);
 
-m = 1500;       % number of examples
-n = 5000;       % number of features
-p = 100/n;      % sparsity density
+n = 500;  % dimension of x
+m = 400;  % number of equality constraints
 
-x0 = sprandn(n,1,p);
-A = randn(m,n);
-A = A*spdiags(1./sqrt(sum(A.^2))',0,n,n); % normalize columns
-b = A*x0 + sqrt(0.001)*randn(m,1);
+c  = rand(n,1) + 0.5;    % create nonnegative price vector with mean 1
+x0 = abs(randn(n,1));    % create random solution vector
 
-lambda_max = norm( A'*b, 'inf' );
-lambda = 0.1*lambda_max;
+A = abs(randn(m,n));     % create random, nonnegative matrix A
+b = A*x0;
 
 % Solve problem
 
-[x history] = lasso(A, b, lambda, 1.0, 1.0);
+[x history] = linprog(c, A, b, 1.0, 1.0);
 
 % Reporting
 
@@ -39,15 +36,15 @@ semilogy(1:K, max(1e-8, history.s_norm), 'k', ...
 ylabel('||s||_2'); xlabel('iter (k)');
 
 
-
-function [z, history] = lasso(A, b, lambda, rho, alpha)
-% lasso  Solve lasso problem via ADMM
+function [z, history] = linprog(c, A, b, rho, alpha)
+% linprog  Solve standard form LP via ADMM
 %
-% [z, history] = lasso(A, b, lambda, rho, alpha);
+% [x, history] = linprog(c, A, b, rho, alpha);
 %
 % Solves the following problem via ADMM:
 %
-%   minimize 1/2*|| Ax - b ||_2^2 + \lambda || x ||_1
+%   minimize     c'*x
+%   subject to   Ax = b, x >= 0
 %
 % The solution is returned in the vector x.
 %
@@ -76,19 +73,13 @@ RELTOL   = 1e-2;
 
 % Data preprocessing
 
-[m, n] = size(A);
-
-% save a matrix-vector multiply
-Atb = A'*b;
+[m n] = size(A);
 
 % ADMM solver
 
 x = zeros(n,1);
 z = zeros(n,1);
 u = zeros(n,1);
-
-% cache the factorization
-[L U] = factor(A, rho);
 
 if ~QUIET
     fprintf('%3s\t%10s\t%10s\t%10s\t%10s\t%10s\n', 'iter', ...
@@ -98,23 +89,19 @@ end
 for k = 1:MAX_ITER
 
     % x-update
-    q = Atb + rho*(z - u);    % temporary value
-    if( m >= n )    % if skinny
-       x = U \ (L \ q);
-    else            % if fat
-       x = q/rho - (A'*(U \ ( L \ (A*q) )))/rho^2;
-    end
+    tmp = [ rho*eye(n), A'; A, zeros(m) ] \ [ rho*(z - u) - c; b ];
+    x = tmp(1:n);
 
     % z-update with relaxation
     zold = z;
     x_hat = alpha*x + (1 - alpha)*zold;
-    z = shrinkage(x_hat + u, lambda/rho);
+    z = pos(x_hat + u);
 
-    % u-update
     u = u + (x_hat - z);
 
     % diagnostics, reporting, termination checks
-    history.objval(k)  = objective(A, b, lambda, x, z);
+
+    history.objval(k)  = objective(c, x);
 
     history.r_norm(k)  = norm(x - z);
     history.s_norm(k)  = norm(-rho*(z - zold));
@@ -132,7 +119,6 @@ for k = 1:MAX_ITER
        history.s_norm(k) < history.eps_dual(k))
          break;
     end
-
 end
 
 if ~QUIET
@@ -140,23 +126,6 @@ if ~QUIET
 end
 end
 
-function p = objective(A, b, lambda, x, z)
-    p = ( 1/2*sum((A*x - b).^2) + lambda*norm(z,1) );
-end
-
-function z = shrinkage(x, kappa)
-    z = max( 0, x - kappa ) - max( 0, -x - kappa );
-end
-
-function [L U] = factor(A, rho)
-    [m, n] = size(A);
-    if ( m >= n )    % if skinny
-       L = chol( A'*A + rho*speye(n), 'lower' );
-    else            % if fat
-       L = chol( speye(m) + 1/rho*(A*A'), 'lower' );
-    end
-
-    % force matlab to recognize the upper / lower triangular structure
-    L = sparse(L);
-    U = sparse(L');
+function obj = objective(c, x)
+    obj = c'*x;
 end
